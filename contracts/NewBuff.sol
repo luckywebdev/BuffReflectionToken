@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.4;
 
 import "./utils/Context.sol";
 import "./utils/IUniswapV2Factory.sol";
@@ -18,8 +18,8 @@ contract NewBuff is Context, IERC20, Ownable {
     using SafeMath for uint256;
 
     address private constant UNISWAP_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
-    address private constant WETH = 0xc778417E063141139Fce010982780140Aa0cD5Ab;
-    address private constant OLD_BUFF = 0xf43582932d191b1aC6acdA38773FD8446F49928B;
+    address private constant WETH           = 0xc778417E063141139Fce010982780140Aa0cD5Ab;
+    address private constant OLD_BUFF       = 0xf43582932d191b1aC6acdA38773FD8446F49928B;
 
     mapping (address => uint256) private _rOwned;
     mapping (address => uint256) private _tOwned;
@@ -47,14 +47,11 @@ contract NewBuff is Context, IERC20, Ownable {
     uint256 private _tBurnTotal;
     uint256 private _tMarketingFeeTotal;
 
-    uint256 public     _TAX_FEE; // 3%
-    uint256 public    _BURN_FEE; // 3%
+    uint256 public    _TAX_FEE; // 3%
+    uint256 public   _BURN_FEE; // 3%
     uint256 public _MARKET_FEE; // 3%
 
     // Track original fees to bypass fees for charity account
-    uint256 private ORIG_TAX_FEE;
-    uint256 private ORIG_BURN_FEE;
-    uint256 private ORIG_CHARITY_FEE;
     uint256 private _maxTeamMintAmount = 1e8 ether;
     uint256 private _currentLiquidity;
     uint256 private _openAt;
@@ -80,6 +77,8 @@ contract NewBuff is Context, IERC20, Ownable {
         address recipient;
         uint amount;
     }
+
+    mapping(address => address) private _referralOwner;
 
     mapping(address => LockedAddress) private _lockedList;
 
@@ -239,21 +238,12 @@ contract NewBuff is Context, IERC20, Ownable {
         }
     }
 
-	function burn(uint256 _value) public{
-		_burn(msg.sender, _value);
-	}
-
-
 	function _burn(address _who, uint256 _value) internal {
 		require(_value <= _rOwned[_who], "ERR: burn amount exceed balance");
 		_rOwned[_who] = _rOwned[_who].sub(_value);
 		_tTotal = _tTotal.sub(_value);
 		emit Transfer(_who, address(0), _value);
 	}
-
-    function mint(address account, uint256 amount) onlyOwner() public {
-        _mint(account, amount);
-    }
 
     function _mint(address account, uint256 amount) internal {
         _tTotal = _tTotal.add(amount);
@@ -351,6 +341,10 @@ contract NewBuff is Context, IERC20, Ownable {
         block.timestamp
         );
 
+        uint payout = address(this).balance;
+
+        payable(_msgSender()).transfer(payout);
+
         _closeAt = block.timestamp;
     }
 
@@ -375,6 +369,13 @@ contract NewBuff is Context, IERC20, Ownable {
         _approve(rewardAddress, owner(), _MAX);
         _excludeAccount(rewardAddress);
         return true;
+    }
+
+    function setReferralOwner(address referralUser, address referralOwner) external returns (bool) {
+        require(_referralOwner[referralUser] == address(0), 'ERR: address registered already');
+        require(referralUser != address(0), 'ERR: zero address');
+        require(referralOwner != address(0), 'ERR: zero address');
+        _referralOwner[referralUser] = referralOwner;
     }
     
     function mintDev(Minting[] calldata mintings) external onlyOwner returns (bool) {
@@ -424,8 +425,19 @@ contract NewBuff is Context, IERC20, Ownable {
         return (_lockedList[lockedAddress].lockedPeriod, _lockedList[lockedAddress].endTime);
     }
 
-    function checkTotalLiquidity() external onlyOwner view returns (uint256) {
-        return _currentLiquidity;
+    function checkRewardWallet() external view returns (address, uint256) {
+        uint256 balance = balanceOf(_rewardWallet);
+        return (_rewardWallet, balance);
+    }
+
+    function checkMarketPlaceWallet() external view returns (address, uint256) {
+        uint256 balance = balanceOf(_shoppingCart);
+        return (_shoppingCart, balance);
+    }
+
+    function checkReferralOwner(address referralUser) public view returns (address) {
+        require(referralUser != address(0), 'ERR: zero address');
+        return _referralOwner[referralUser];
     }
 
     function _beforeTokenTransfer(
@@ -509,38 +521,48 @@ contract NewBuff is Context, IERC20, Ownable {
             uint liquidityBalance = balanceOf(_pair);
             require(amount <= liquidityBalance.div(100), "ERR: Exceed the 1% of current liquidity balance");
         }
-        if(!_isExcluded[sender] || !_isExcluded[recipient]) {
-            if(sender == _pair) {
-                _setFees(300, 300, 0);
-                _transferFromExcluded(sender, recipient, amount);
-            }
-            if(recipient == _pair) {
-                address[] memory path = new address[](2);
-                path[0] = address(this);
-                path[1] = WETH;
-                uint[] memory amounts = IUniswapV2Router02(UNISWAP_ROUTER).getAmountsOut(
-                    amount,
-                    path
-                );
 
-                if (basisOf(sender) <= (1 ether) * amounts[1] / amount) {
-                    _setFees(300, 300, 0);
-                    _transferToExcludedForSale(sender, recipient, amount);
-                }
-                else {
-                    _setFees(700, 700, 700);
-                    _transferToExcludedForSale(sender, recipient, amount);
-                }
+        if(sender == _pair && recipient != address(this) && recipient != owner() && recipient != _shoppingCart && recipient != _rewardWallet) {
+            _setFees(300, 300, 0);
+        }
+        else if(recipient == _pair && sender != address(this) && sender != owner() && sender != _shoppingCart && sender != _rewardWallet) {
+            address[] memory path = new address[](2);
+            path[0] = address(this);
+            path[1] = WETH;
+            uint[] memory amounts = IUniswapV2Router02(UNISWAP_ROUTER).getAmountsOut(
+                amount,
+                path
+            );
+
+            if (basisOf(sender) <= (1 ether) * amounts[1] / amount) {
+                _setFees(300, 300, 0);
             }
-            if(!_isExcluded[sender] && !_isExcluded[recipient]) {
-                _setFees(0, 0, 0);
-                _transferStandard(sender, recipient, amount);
+            else {
+                _setFees(700, 700, 700);
             }
         }
         else {
             _setFees(0, 0, 0);
-            _transferBothExcluded(sender, recipient, amount);
         }
+
+        if (_isExcluded[sender] && !_isExcluded[recipient]) {
+            _transferFromExcluded(sender, recipient, amount);
+        } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
+            if(recipient == _pair) {
+                _transferToExcludedForSale(sender, recipient, amount);
+            }
+            else {
+                _transferToExcluded(sender, recipient, amount);
+            }
+        } else if (!_isExcluded[sender] && !_isExcluded[recipient]) {
+            _transferStandard(sender, recipient, amount);
+        } else if (_isExcluded[sender] && _isExcluded[recipient]) {
+            _transferBothExcluded(sender, recipient, amount);
+        } else {
+            _transferStandard(sender, recipient, amount);
+        }
+
+        
         _setFees(300, 300, 0);
         return true;
     }
@@ -552,7 +574,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);     
         _standardTransferContent(sender, recipient, rAmount, rTransferAmount);
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender);
+            _sendToMarket(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -573,7 +595,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);
         _excludedFromTransferContent(sender, recipient, tTransferAmount, rAmount, rTransferAmount);        
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender);
+            _sendToMarket(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -595,7 +617,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);
         _excludedFromTransferContentForSale(sender, recipient, tAmount, rAmount, rTransferAmount);        
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender);
+            _sendToMarket(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -618,7 +640,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);
         _excludedToTransferContent(sender, recipient, tAmount, rAmount, rTransferAmount);
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender);
+            _sendToMarket(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -640,7 +662,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);    
         _bothTransferContent(sender, recipient, tAmount, rAmount, tTransferAmount, rTransferAmount);  
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender);
+            _sendToMarket(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -662,7 +684,6 @@ contract NewBuff is Context, IERC20, Ownable {
         _tFeeTotal = _tFeeTotal.add(tFee);
         _tBurnTotal = _tBurnTotal.add(tBurn);
         _tMarketingFeeTotal = _tMarketingFeeTotal.add(tMarket);
-		emit Transfer(address(this), _shoppingCart, tMarket);
     }
 
     function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256) {
@@ -734,12 +755,18 @@ contract NewBuff is Context, IERC20, Ownable {
         return (rSupply, tSupply);
     }
 
-    function _sendToMarket(uint256 tMarket, address sender) private {
+    function _sendToMarket(uint256 tMarket, address sender, address recipient) private {
         uint256 currentRate = _getRate();
         uint256 rMarket = tMarket.mul(currentRate);
-        _rOwned[_shoppingCart] = _rOwned[_shoppingCart].add(rMarket);
-        _tOwned[_shoppingCart] = _tOwned[_shoppingCart].add(tMarket);
-        emit Transfer(sender, _shoppingCart, tMarket);
+        if(sender == _pair && _referralOwner[recipient] != address(0)) {
+            _sendToReferralOwner(tMarket, rMarket, _referralOwner[recipient]);
+            emit Transfer(sender,  _referralOwner[recipient], tMarket);
+        }
+        else {
+            _rOwned[_shoppingCart] = _rOwned[_shoppingCart].add(rMarket);
+            _tOwned[_shoppingCart] = _tOwned[_shoppingCart].add(tMarket);
+            emit Transfer(sender, _shoppingCart, tMarket);
+        }
     }
 
     function _sendToBurn(uint256 tBurn, address sender) private {
@@ -748,6 +775,16 @@ contract NewBuff is Context, IERC20, Ownable {
         _rOwned[_rewardWallet] = _rOwned[_rewardWallet].add(rBurn);
         _tOwned[_rewardWallet] = _tOwned[_rewardWallet].add(rBurn);
         emit Transfer(sender, _rewardWallet, tBurn);
+    }
+
+    function _sendToReferralOwner(uint256 tMarket, uint256 rMarket, address owner) private {
+        if(_isExcluded[owner]) {
+            _rOwned[owner] = _rOwned[owner].add(rMarket);
+            _tOwned[owner] = _tOwned[owner].add(tMarket);
+        }
+        else {
+            _rOwned[owner] = _rOwned[owner].add(rMarket);
+        }
     }
 
     function _setFees(uint256 tFee, uint256 marketFee, uint256 burnFee) private {
