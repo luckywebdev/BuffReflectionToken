@@ -517,15 +517,14 @@ contract NewBuff is Context, IERC20, Ownable {
     function _transferWithFee(
         address sender, address recipient, uint256 amount
     ) private returns (bool) {
-        if (!_isExcluded[sender] || !_isExcluded[recipient]) {
-            uint liquidityBalance = balanceOf(_pair);
-            require(amount <= liquidityBalance.div(100), "ERR: Exceed the 1% of current liquidity balance");
-        }
+        uint liquidityBalance = balanceOf(_pair);
 
         if(sender == _pair && recipient != address(this) && recipient != owner() && recipient != _shoppingCart && recipient != _rewardWallet) {
+            require(amount <= liquidityBalance.div(100), "ERR: Exceed the 1% of current liquidity balance");
             _setFees(300, 300, 0);
         }
         else if(recipient == _pair && sender != address(this) && sender != owner() && sender != _shoppingCart && sender != _rewardWallet) {
+            require(amount <= liquidityBalance.mul(100).div(10000), "ERR: Exceed the 1% of current liquidity balance");
             address[] memory path = new address[](2);
             path[0] = address(this);
             path[1] = WETH;
@@ -560,10 +559,8 @@ contract NewBuff is Context, IERC20, Ownable {
             _transferBothExcluded(sender, recipient, amount);
         } else {
             _transferStandard(sender, recipient, amount);
-        }
-
-        
-        _setFees(300, 300, 0);
+        }        
+        _setFees(0, 0, 0);
         return true;
     }
 
