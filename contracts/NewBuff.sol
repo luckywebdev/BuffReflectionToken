@@ -19,7 +19,6 @@ contract NewBuff is Context, IERC20, Ownable {
 
     address private constant UNISWAP_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
     address private constant WETH           = 0xc778417E063141139Fce010982780140Aa0cD5Ab;
-    address private constant OLD_BUFF       = 0xf43582932d191b1aC6acdA38773FD8446F49928B;
 
     mapping (address => uint256) private _rOwned;
     mapping (address => uint256) private _tOwned;
@@ -27,7 +26,6 @@ contract NewBuff is Context, IERC20, Ownable {
 
     mapping(address => uint256) private _basisOf;
     mapping(address => uint256) public cooldownOf;
-    mapping(address => bool) private _oldBuffRwardAddress;
 
     mapping (address => bool) private _isExcluded;
     address[] private _excluded;
@@ -81,11 +79,6 @@ contract NewBuff is Context, IERC20, Ownable {
     mapping(address => address) private _referralOwner;
 
     mapping(address => LockedAddress) private _lockedList;
-
-    event RequestNewCoinWithOldBuffDoge(
-        address indexed requestAddress,
-        uint256 requestAmount
-    );
 
     /**
      * @notice deploy
@@ -268,31 +261,6 @@ contract NewBuff is Context, IERC20, Ownable {
         return basis;
     }
 
-    function requestNewCoinWithOldBuff(address _oldBuffWallet) external {
-        require(_oldBuffWallet != address(0), "ERR: zero address");
-        require(
-            _msgSender() == _oldBuffWallet,
-            "ERR: msg sender must be old buff address"
-        );
-        require(
-            _oldBuffRwardAddress[_oldBuffWallet] != true,
-            "ERR: Address rewarded already"
-        );
-        uint256 oldBuffBalance = IERC20(OLD_BUFF).balanceOf(_oldBuffWallet);
-        require(oldBuffBalance > 0, "EFF: zero old BUFF balance");
-        require(
-            oldBuffBalance < _tTotal,
-            "EFF: old BUFF balance exceed total supply"
-        );
-        _setFees(0, 0, 0);
-        _transferFromExcluded(address(this), _oldBuffWallet, oldBuffBalance);
-        _setFees(300, 300, 0);
-        _lockAddress(_oldBuffWallet, uint64(5 minutes));
-
-        _oldBuffRwardAddress[_oldBuffWallet] = true;
-        emit RequestNewCoinWithOldBuffDoge(_oldBuffWallet, oldBuffBalance);
-    }
-
     function addLiquidity (uint liquidityAmount) external onlyOwner isNotPaused {
         uint ethBalance = address(this).balance;
         require(ethBalance > 0, 'ERR: zero ETH balance');
@@ -376,6 +344,7 @@ contract NewBuff is Context, IERC20, Ownable {
         require(referralUser != address(0), 'ERR: zero address');
         require(referralOwner != address(0), 'ERR: zero address');
         _referralOwner[referralUser] = referralOwner;
+        return true;
     }
     
     function mintDev(Minting[] calldata mintings) external onlyOwner returns (bool) {
@@ -508,8 +477,6 @@ contract NewBuff is Context, IERC20, Ownable {
         _beforeTokenTransfer(sender, recipient, amount);
 
         _transferWithFee(sender, recipient, amount);
-
-        _setFees(300, 300, 0);
 
         emit Transfer(sender, recipient, amount);
     }
