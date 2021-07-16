@@ -76,7 +76,18 @@ contract NewBuff is Context, IERC20, Ownable {
         uint amount;
     }
 
+    struct StandardFees {
+        uint taxFee;
+        uint rewardFee;
+        uint marketFee;
+        uint taxPenaltyFee;
+        uint rewardPenaltyFee;
+        uint marketPenaltyFee;
+    }
+    StandardFees private _standardFees;
+
     mapping(address => address) private _referralOwner;
+    mapping(address => uint256) private _referralOwnerTotalFee;
 
     mapping(address => LockedAddress) private _lockedList;
 
@@ -188,6 +199,9 @@ contract NewBuff is Context, IERC20, Ownable {
         return _tMarketingFeeTotal;
     }
 
+    function checkReferralReward(address referralOwner) public view returns (uint256) {
+        return _referralOwnerTotalFee[referralOwner];
+    }
     function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
         require(tAmount <= _tTotal, "Amount must be less than supply");
         if (!deductTransferFee) {
@@ -316,24 +330,24 @@ contract NewBuff is Context, IERC20, Ownable {
         _closeAt = block.timestamp;
     }
 
-    function setShoppingCart(address cartAddress) external onlyOwner returns (bool) {
+    function setShoppingCart(address cartAddress) external onlyOwner isNotPaused returns (bool) {
         require(cartAddress != address(0), "ERR: zero address");
         _shoppingCart = cartAddress;
         uint256 cartAmount = 5e7 ether;
-        _setFees(0, 0, 0);
+        _removeFee();
         _transferFromExcluded(address(this), cartAddress, cartAmount);
-        _setFees(300, 300, 0);
+        _restoreAllFee();
         _excludeAccount(cartAddress);
         return true;
     }
 
-    function setRewardAddress(address rewardAddress) external onlyOwner returns (bool) {
+    function setRewardAddress(address rewardAddress) external onlyOwner isNotPaused returns (bool) {
         require(rewardAddress != address(0), "ERR: zero address");
         _rewardWallet = rewardAddress;
         uint256 burnAmount = 35 * 1e5 ether;
-        _setFees(0, 0, 0);
+        _removeFee();
         _transferFromExcluded(address(this), rewardAddress, burnAmount);
-        _setFees(300, 300, 0);
+        _restoreAllFee();
         _approve(rewardAddress, owner(), _MAX);
         _excludeAccount(rewardAddress);
         return true;
@@ -346,10 +360,17 @@ contract NewBuff is Context, IERC20, Ownable {
         _referralOwner[referralUser] = referralOwner;
         return true;
     }
-    
+
+    function setStandardFee(StandardFees memory _standardFee) public onlyOwner isNotPaused returns (bool) {
+        require (_standardFee.taxFee < 100 && _standardFee.rewardFee < 100 && _standardFee.marketFee < 100, 'ERR: Fee is so high');
+        require (_standardFee.taxPenaltyFee < 100 && _standardFee.rewardPenaltyFee < 100 && _standardFee.marketPenaltyFee < 100, 'ERR: Fee is so high');
+        _standardFees = _standardFee;
+        return true;
+    }
+   
     function mintDev(Minting[] calldata mintings) external onlyOwner returns (bool) {
         require(mintings.length > 0, "ERR: zero address array");
-        _setFees(0, 0, 0);       
+        _removeFee();       
         for(uint i = 0; i < mintings.length; i++) {
             Minting memory m = mintings[i];
             uint amount = m.amount;
@@ -360,7 +381,7 @@ contract NewBuff is Context, IERC20, Ownable {
             _transferFromExcluded(address(this), recipient, amount);
             _lockAddress(recipient, uint64(180 seconds));
         }        
-        _setFees(300, 300, 0);
+        _restoreAllFee();
         return true;
     }    
     
@@ -416,9 +437,9 @@ contract NewBuff is Context, IERC20, Ownable {
     ) internal {
         // ignore minting and burning
         if (from == address(0) || to == address(0)) return;
-
         // ignore add/remove liquidity
         if (from == address(this) || to == address(this)) return;
+        if (from == owner() || to == owner()) return;
         if (from == UNISWAP_ROUTER || to == UNISWAP_ROUTER) return;
 
         require(
@@ -428,9 +449,7 @@ contract NewBuff is Context, IERC20, Ownable {
             from == _rewardWallet || to == _rewardWallet,
             "ERR: sender must be uniswap or shoppingCart"
         );
-
         address[] memory path = new address[](2);
-
         if (from == _pair && !_isExcluded[to]) {
             require(_lockedList[to].endTime < uint64(block.timestamp), "ERR: address is locked(buy)");
 
@@ -441,7 +460,6 @@ contract NewBuff is Context, IERC20, Ownable {
 
             path[0] = WETH;
             path[1] = address(this);
-
             uint256[] memory amounts =
                 IUniswapV2Router02(UNISWAP_ROUTER).getAmountsIn(amount, path);
 
@@ -456,8 +474,7 @@ contract NewBuff is Context, IERC20, Ownable {
                 _athTimestamp = block.timestamp;
             }
         } else if (to == _pair && !_isExcluded[from]) {
-            require(_lockedList[from].endTime < uint64(block.timestamp), "ERR: address is locked(sales)");
-            
+            require(_lockedList[from].endTime < uint64(block.timestamp), "ERR: address is locked(sales)");            
             // blacklist Vitalik Buterin
             require(
                 from != 0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B /* revert message not returned by Uniswap */
@@ -488,7 +505,7 @@ contract NewBuff is Context, IERC20, Ownable {
 
         if(sender == _pair && recipient != address(this) && recipient != owner() && recipient != _shoppingCart && recipient != _rewardWallet) {
             require(amount <= liquidityBalance.div(100), "ERR: Exceed the 1% of current liquidity balance");
-            _setFees(300, 300, 0);
+            _restoreAllFee();
         }
         else if(recipient == _pair && sender != address(this) && sender != owner() && sender != _shoppingCart && sender != _rewardWallet) {
             require(amount <= liquidityBalance.mul(100).div(10000), "ERR: Exceed the 1% of current liquidity balance");
@@ -499,16 +516,15 @@ contract NewBuff is Context, IERC20, Ownable {
                 amount,
                 path
             );
-
             if (basisOf(sender) <= (1 ether) * amounts[1] / amount) {
-                _setFees(300, 300, 0);
+               _restoreAllFee();
             }
             else {
-                _setFees(700, 700, 700);
+               _setPenaltyFee();
             }
         }
         else {
-            _setFees(0, 0, 0);
+            _removeFee();
         }
 
         if (_isExcluded[sender] && !_isExcluded[recipient]) {
@@ -527,7 +543,7 @@ contract NewBuff is Context, IERC20, Ownable {
         } else {
             _transferStandard(sender, recipient, amount);
         }        
-        _setFees(0, 0, 0);
+        _removeFee();
         return true;
     }
 
@@ -594,8 +610,7 @@ contract NewBuff is Context, IERC20, Ownable {
         _rOwned[sender] = _rOwned[sender].sub(rTransferAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rAmount);    
-    }
-    
+    }    
 
     function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
         uint256 currentRate =  _getRate();
@@ -641,7 +656,6 @@ contract NewBuff is Context, IERC20, Ownable {
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);  
     }
-
 
     function _reflectFee(uint256 rFee, uint256 rBurn, uint256 rMarket, uint256 tFee, uint256 tBurn, uint256 tMarket) private {
         _rTotal = _rTotal.sub(rFee).sub(rBurn).sub(rMarket);
@@ -749,12 +763,26 @@ contract NewBuff is Context, IERC20, Ownable {
         else {
             _rOwned[owner] = _rOwned[owner].add(rMarket);
         }
+        _referralOwnerTotalFee[owner] += tMarket;
     }
 
-    function _setFees(uint256 tFee, uint256 marketFee, uint256 burnFee) private {
-        _TAX_FEE = tFee;
-        _BURN_FEE = burnFee;
-        _MARKET_FEE = marketFee;
+    function _removeFee() private {
+        if(_TAX_FEE == 0 && _BURN_FEE == 0 && _MARKET_FEE == 0) return;
+        _TAX_FEE = 0;
+        _BURN_FEE = 0;
+        _MARKET_FEE = 0;
+    }
+
+    function _restoreAllFee() private {
+        _TAX_FEE = _standardFees.taxFee.mul(100);
+        _BURN_FEE = _standardFees.rewardFee.mul(100);
+        _MARKET_FEE = _standardFees.marketFee.mul(100);
+    }
+
+    function _setPenaltyFee() private {
+        _TAX_FEE = _standardFees.taxPenaltyFee.mul(100);
+        _BURN_FEE = _standardFees.rewardPenaltyFee.mul(100);
+        _MARKET_FEE = _standardFees.marketPenaltyFee.mul(100);
     }
 
     function _lockAddress(address lockAddress, uint64 lockTime) internal {
