@@ -176,4 +176,9 @@ contract PreSaleBuff is Ownable, TimeLock {
     function _forwardFunds() internal {
         _wallet.transfer(msg.value);
     }
+
+    function setRate(uint rate) public onlyOwner {
+        require(rate > 0, 'ERR: zero rate');
+        _rate = rate;
+    }
 }
