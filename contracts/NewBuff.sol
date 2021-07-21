@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-
 pragma solidity ^0.8.4;
+pragma experimental ABIEncoderV2;
 
 import "./utils/Context.sol";
 import "./utils/IUniswapV2Factory.sol";
@@ -9,12 +9,12 @@ import "./utils/IUniswapV2Router02.sol";
 import "./utils/IERC20.sol";
 import "./utils/Ownable.sol";
 import "./utils/SafeMath.sol";
-
+import "./utils/TimeLock.sol";
 
 /**
  * @notice ERC20 token with cost basis tracking and restricted loss-taking
  */
-contract NewBuff is Context, IERC20, Ownable {
+contract NewBuff is Context, IERC20, Ownable, TimeLock {
     using SafeMath for uint256;
 
     address private constant UNISWAP_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
@@ -26,7 +26,7 @@ contract NewBuff is Context, IERC20, Ownable {
 
     mapping(address => uint256) private _basisOf;
     mapping(address => uint256) public cooldownOf;
-
+    mapping (address => bool) private _isAllowedTransfer;
     mapping (address => bool) private _isExcluded;
     address[] private _excluded;
 
@@ -62,15 +62,11 @@ contract NewBuff is Context, IERC20, Ownable {
 
     address private _shoppingCart;
     address private _rewardWallet;
+    address private _presale;
     address private _pair;
 
     bool private _paused;
 
-    struct LockedAddress {
-        uint64 lockedPeriod;
-        uint64 endTime;
-    }
-    
     struct Minting {
         address recipient;
         uint amount;
@@ -88,8 +84,6 @@ contract NewBuff is Context, IERC20, Ownable {
 
     mapping(address => address) private _referralOwner;
     mapping(address => uint256) private _referralOwnerTotalFee;
-
-    mapping(address => LockedAddress) private _lockedList;
 
     /**
      * @notice deploy
@@ -110,6 +104,13 @@ contract NewBuff is Context, IERC20, Ownable {
         _excludeAccount(address(this));
         _excludeAccount(_pair);
         _excludeAccount(UNISWAP_ROUTER);
+        _isAllowedTransfer[address(this)] = true;
+        _isAllowedTransfer[_msgSender()] = true;
+        _isAllowedTransfer[_pair] = true;
+        _isAllowedTransfer[UNISWAP_ROUTER] = true;
+        excludeFromLock(address(this));
+        excludeFromLock(_pair);
+        excludeFromLock(UNISWAP_ROUTER);
 
         // prepare to add liquidity
         _approve(address(this), UNISWAP_ROUTER, _rTotal);
@@ -275,70 +276,17 @@ contract NewBuff is Context, IERC20, Ownable {
         return basis;
     }
 
-    function addLiquidity (uint liquidityAmount) external onlyOwner isNotPaused {
-        uint ethBalance = address(this).balance;
-        require(ethBalance > 0, 'ERR: zero ETH balance');
-
-        // add liquidity, set initial cost basis
-        uint limitAmount = 5e8 ether;
-        require(limitAmount >= _currentLiquidity.add(liquidityAmount), "ERR: liquidity amount must be less than 500,000,000");
-
-        _initialBasis = ((1 ether) * ethBalance / liquidityAmount);
-
-        (uint amountToken, , ) = IUniswapV2Router02(
-            UNISWAP_ROUTER
-        ).addLiquidityETH{
-            value: address(this).balance
-        }(
-            address(this),
-            liquidityAmount,
-            0,
-            0,
-            address(this),
-            block.timestamp
-        );
-        _currentLiquidity = _currentLiquidity.add(amountToken);
-        _openAt = block.timestamp;
-        _closeAt = 0;
-    }
-
-    function removeLiquidity () external onlyOwner isNotPaused {
-        require(_openAt > 0, 'ERR: not yet opened');
-        require(_closeAt == 0, 'ERR: already closed');
-        require(block.timestamp > _openAt + (5 minutes), 'ERR: too soon');
-
-        require(
-            block.timestamp > _athTimestamp + (5 minutes),
-            'ERR: recent ATH'
-        );
-
-        IUniswapV2Router02(
-        UNISWAP_ROUTER
-        ).removeLiquidityETH(
-        address(this),
-        IERC20(_pair).balanceOf(address(this)),
-        0,
-        0,
-        address(this),
-        block.timestamp
-        );
-
-        uint payout = address(this).balance;
-
-        payable(_msgSender()).transfer(payout);
-
-        _closeAt = block.timestamp;
-    }
-
     function setBusinessWallet(address businessAddress) external onlyOwner isNotPaused returns (bool) {
         require(businessAddress != address(0), "ERR: zero address");
         _shoppingCart = businessAddress;
         uint256 cartAmount = 5e7 ether;
+        excludeFromLock(businessAddress);
         _removeFee();
         _transferFromExcluded(address(this), businessAddress, cartAmount);
         _restoreAllFee();
         _approve(businessAddress, owner(), _MAX);
         _excludeAccount(businessAddress);
+        _isAllowedTransfer[businessAddress] = true;
         return true;
     }
 
@@ -346,11 +294,26 @@ contract NewBuff is Context, IERC20, Ownable {
         require(rewardAddress != address(0), "ERR: zero address");
         _rewardWallet = rewardAddress;
         uint256 burnAmount = 35 * 1e7 ether;
+        excludeFromLock(rewardAddress);
         _removeFee();
         _transferFromExcluded(address(this), rewardAddress, burnAmount);
         _restoreAllFee();
         _approve(rewardAddress, owner(), _MAX);
         _excludeAccount(rewardAddress);
+        _isAllowedTransfer[rewardAddress] = true;
+        return true;
+    }
+
+    function setPreSaleAddress(address presaleAddress) external onlyOwner isNotPaused returns (bool) {
+        require(presaleAddress != address(0), "ERR: zero address");
+        _presale = presaleAddress;
+        uint256 presaleAmount = 1e8 ether;
+        excludeFromLock(presaleAddress);
+        _removeFee();
+        _transferFromExcluded(address(this), presaleAddress, presaleAmount);
+        _restoreAllFee();
+        _excludeAccount(presaleAddress);
+        _isAllowedTransfer[presaleAddress] = true;
         return true;
     }
 
@@ -380,7 +343,7 @@ contract NewBuff is Context, IERC20, Ownable {
             mintedSupply += amount;
             require(mintedSupply <= _maxTeamMintAmount, "ERR: exceed max team mint amount");
             _transferFromExcluded(address(this), recipient, amount);
-            _lockAddress(recipient, uint64(180 seconds));
+            lockAddress(recipient, uint64(180 seconds));
         }        
         _restoreAllFee();
         return true;
@@ -406,10 +369,6 @@ contract NewBuff is Context, IERC20, Ownable {
         return _pair;
     }
 
-    function checkLockTime(address lockedAddress) external view returns (uint64, uint64) {
-        return (_lockedList[lockedAddress].lockedPeriod, _lockedList[lockedAddress].endTime);
-    }
-
     function checkReferralOwner(address referralUser) public view returns (address) {
         require(referralUser != address(0), 'ERR: zero address');
         return _referralOwner[referralUser];
@@ -430,13 +389,12 @@ contract NewBuff is Context, IERC20, Ownable {
         require(
             msg.sender == UNISWAP_ROUTER ||
             msg.sender == _pair || msg.sender == owner() ||
-            from == _shoppingCart || to == _shoppingCart ||
-            from == _rewardWallet || to == _rewardWallet,
+            _isAllowedTransfer[from] || _isAllowedTransfer[to],
             "ERR: sender must be uniswap or shoppingCart"
         );
         address[] memory path = new address[](2);
         if (from == _pair && !_isExcluded[to]) {
-            require(_lockedList[to].endTime < uint64(block.timestamp), "ERR: address is locked(buy)");
+            require(isLocked(to), "ERR: address is locked(buy)");
 
             require(
                 cooldownOf[to] < block.timestamp /* revert message not returned by Uniswap */
@@ -459,7 +417,7 @@ contract NewBuff is Context, IERC20, Ownable {
                 _athTimestamp = block.timestamp;
             }
         } else if (to == _pair && !_isExcluded[from]) {
-            require(_lockedList[from].endTime < uint64(block.timestamp), "ERR: address is locked(sales)");            
+            require(isLocked(from), "ERR: address is locked(sales)");            
             // blacklist Vitalik Buterin
             require(
                 from != 0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B /* revert message not returned by Uniswap */
@@ -488,11 +446,11 @@ contract NewBuff is Context, IERC20, Ownable {
     ) private returns (bool) {
         uint liquidityBalance = balanceOf(_pair);
 
-        if(sender == _pair && recipient != address(this) && recipient != owner() && recipient != _shoppingCart && recipient != _rewardWallet) {
+        if(sender == _pair && !_isAllowedTransfer[recipient]) {
             require(amount <= liquidityBalance.div(100), "ERR: Exceed the 1% of current liquidity balance");
             _restoreAllFee();
         }
-        else if(recipient == _pair && sender != address(this) && sender != owner() && sender != _shoppingCart && sender != _rewardWallet) {
+        else if(recipient == _pair && !_isAllowedTransfer[sender]) {
             require(amount <= liquidityBalance.mul(100).div(10000), "ERR: Exceed the 1% of current liquidity balance");
             address[] memory path = new address[](2);
             path[0] = address(this);
@@ -527,8 +485,8 @@ contract NewBuff is Context, IERC20, Ownable {
             _transferBothExcluded(sender, recipient, amount);
         } else {
             _transferStandard(sender, recipient, amount);
-        }        
-        _removeFee();
+        }
+        _restoreAllFee();
         return true;
     }
 
@@ -768,17 +726,5 @@ contract NewBuff is Context, IERC20, Ownable {
         _TAX_FEE = _standardFees.taxPenaltyFee.mul(100);
         _BURN_FEE = _standardFees.rewardPenaltyFee.mul(100);
         _MARKET_FEE = _standardFees.marketPenaltyFee.mul(100);
-    }
-
-    function _lockAddress(address lockAddress, uint64 lockTime) internal {
-        require(lockAddress != address(0), "ERR: zero lock address");
-        require(lockTime > 0, "ERR: zero lock period");
-        require(_lockedList[lockAddress].endTime == 0, "ERR: already locked");
-        if (lockAddress != _pair && lockAddress != UNISWAP_ROUTER &&
-            lockAddress != _shoppingCart && lockAddress != address(this) &&
-            lockAddress != owner()) {
-            _lockedList[lockAddress].lockedPeriod = lockTime;
-            _lockedList[lockAddress].endTime = uint64(block.timestamp) + lockTime;
-        }
     }
 }
