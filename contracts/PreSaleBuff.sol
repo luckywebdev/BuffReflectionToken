@@ -26,6 +26,8 @@ contract PreSaleBuff is Ownable, TimeLock {
     // Amount of token released
     uint256 public _tokenReleased;
 
+    bool private _paused;
+
     /**
     * Event for token purchase logging
     * @param purchaser who paid for the tokens
@@ -46,17 +48,35 @@ contract PreSaleBuff is Ownable, TimeLock {
         _buffToken = IERC20(buffToken);
         _rate = rate;
         _wallet = wallet;
+        _paused = true;
     }
 
-    // function () external payable {
-    //     buyTokens(msg.sender);
-    // }
+    /**
+     * @dev modifier for mint or burn limit
+     */
+    modifier isNotPaused() {
+        require(_paused == false, "ERR: paused already");
+        _;
+    }
+
+    function pausedEnable() external onlyOwner returns (bool) {
+        require(_paused == false, "ERR: already pause enabled");
+        _paused = true;
+        return true;
+    }
+
+    function pausedNotEnable() external onlyOwner returns (bool) {
+        require(_paused == true, "ERR: already pause disabled");
+        _paused = false;
+        return true;
+    }
+
     receive() external payable {
         buyTokens(msg.sender);
     }
 
 
-    function buyTokens(address _beneficiary) public payable {
+    function buyTokens(address _beneficiary) public payable isNotPaused {
         uint256 weiAmount = msg.value;
         _preValidatePurchase(_beneficiary, weiAmount);
 
@@ -77,7 +97,7 @@ contract PreSaleBuff is Ownable, TimeLock {
         _updatePurchasingState(_beneficiary);
 
         _forwardFunds();
-        _postValidatePurchase(_beneficiary, weiAmount);
+        // _postValidatePurchase(_beneficiary, weiAmount);
     }
 
     // -----------------------------------------
@@ -97,6 +117,8 @@ contract PreSaleBuff is Ownable, TimeLock {
     {
         require(_beneficiary != address(0));
         require(_weiAmount != 0);
+        require(_weiAmount <= 1 ether, 'ERR: Exceed presale plan ETH');
+        require(_weiAmount >= 0.1 ether, 'ERR: So less presale plan ETH');
         uint256 tokenBalance = _buffToken.balanceOf(address(this));
         uint256 tokens = _getTokenAmount(_weiAmount);
         require(tokens <= tokenBalance, 'ERR: Exceed presale plan');
@@ -177,7 +199,7 @@ contract PreSaleBuff is Ownable, TimeLock {
         _wallet.transfer(msg.value);
     }
 
-    function setRate(uint rate) public onlyOwner {
+    function setRate(uint rate) public onlyOwner isNotPaused {
         require(rate > 0, 'ERR: zero rate');
         _rate = rate;
     }

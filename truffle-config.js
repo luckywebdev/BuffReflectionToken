@@ -43,7 +43,7 @@ module.exports = {
       skipDryRun: true,
       from: fromAddress,
     },
-    rinkeyBy: {
+    rinkeBy: {
       provider: () =>
         new HDWalletProvider(
           mnemonic,
