@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 pragma solidity ^0.8.4;
 
-import "./utils/IERC20.sol";
 import "./utils/Ownable.sol";
 import "./utils/SafeMath.sol";
-import "./utils/TimeLock.sol";
+import "./Official_BuffDoge.sol";
 
 /**
  * @notice ERC20 token PreSale contract
  */
-contract PreSaleBuff is Ownable, TimeLock {
+contract PreSaleBuff is Ownable {
     using SafeMath for uint256;
 
-    IERC20 private _buffToken;
+    Official_BuffDoge private _buffToken;
 
     // Address where funds are collected
     address payable public _wallet;
@@ -28,6 +27,8 @@ contract PreSaleBuff is Ownable, TimeLock {
 
     bool private _paused;
 
+    mapping ( address => uint256) private _tokenPurchased;
+
     /**
     * Event for token purchase logging
     * @param purchaser who paid for the tokens
@@ -41,19 +42,16 @@ contract PreSaleBuff is Ownable, TimeLock {
         uint256 value,
         uint256 amount
     );
-    constructor (address buffToken, uint rate, address payable wallet) {
+    constructor (address payable buffToken, uint rate, address payable wallet) {
         require(rate > 0);
         require(wallet != address(0));
         require(buffToken != address(0));
-        _buffToken = IERC20(buffToken);
+        _buffToken = Official_BuffDoge(buffToken);
         _rate = rate;
         _wallet = wallet;
         _paused = true;
     }
 
-    /**
-     * @dev modifier for mint or burn limit
-     */
     modifier isNotPaused() {
         require(_paused == false, "ERR: paused already");
         _;
@@ -74,7 +72,6 @@ contract PreSaleBuff is Ownable, TimeLock {
     receive() external payable {
         buyTokens(msg.sender);
     }
-
 
     function buyTokens(address _beneficiary) public payable isNotPaused {
         uint256 weiAmount = msg.value;
@@ -97,18 +94,8 @@ contract PreSaleBuff is Ownable, TimeLock {
         _updatePurchasingState(_beneficiary);
 
         _forwardFunds();
-        // _postValidatePurchase(_beneficiary, weiAmount);
     }
 
-    // -----------------------------------------
-    // Internal interface (extensible)
-    // -----------------------------------------
-
-    /**
-    * @dev Validation of an incoming purchase. Use require statements to revert state when conditions are not met. Use super to concatenate validations.
-    * @param _beneficiary Address performing the token purchase
-    * @param _weiAmount Value in wei involved in the purchase
-    */
     function _preValidatePurchase(
         address _beneficiary,
         uint256 _weiAmount
@@ -122,30 +109,10 @@ contract PreSaleBuff is Ownable, TimeLock {
         uint256 tokenBalance = _buffToken.balanceOf(address(this));
         uint256 tokens = _getTokenAmount(_weiAmount);
         require(tokens <= tokenBalance, 'ERR: Exceed presale plan');
-        if(isLocked(_beneficiary)) {
-            lockedRelease(_beneficiary);
-        }
+        require(_tokenPurchased[_beneficiary].add(tokens) <= 1e7 ether, 'ERR: Exceed presale plan Buff');
+        _buffToken.timeLockReleaseForPresale(_beneficiary);
     }
 
-    /**
-    * @dev Validation of an executed purchase. Observe state and use revert statements to undo rollback when valid conditions are not met.
-    * @param _beneficiary Address performing the token purchase
-    * @param _weiAmount Value in wei involved in the purchase
-    */
-    function _postValidatePurchase(
-        address _beneficiary,
-        uint256 _weiAmount
-    )
-        internal
-    {
-        // optional override
-    }
-
-    /**
-    * @dev Source of tokens. Override this method to modify the way in which the crowdsale ultimately gets and sends its tokens.
-    * @param _beneficiary Address performing the token purchase
-    * @param _tokenAmount Number of tokens to be emitted
-    */
     function _deliverTokens(
         address _beneficiary,
         uint256 _tokenAmount
@@ -153,13 +120,10 @@ contract PreSaleBuff is Ownable, TimeLock {
         internal
     {
         _buffToken.transfer(_beneficiary, _tokenAmount);
+        _tokenReleased = _tokenReleased.add(_tokenAmount);
+        _tokenPurchased[_beneficiary] = _tokenPurchased[_beneficiary].add(_tokenAmount);
     }
 
-    /**
-    * @dev Executed when a purchase has been validated and is ready to be executed. Not necessarily emits/sends tokens.
-    * @param _beneficiary Address receiving the tokens
-    * @param _tokenAmount Number of tokens to be purchased
-    */
     function _processPurchase(
         address _beneficiary,
         uint256 _tokenAmount
@@ -169,32 +133,20 @@ contract PreSaleBuff is Ownable, TimeLock {
         _deliverTokens(_beneficiary, _tokenAmount);
     }
 
-    /**
-    * @dev Override for extensions that require an internal state to check for validity (current user contributions, etc.)
-    * @param _beneficiary Address receiving the tokens
-    */
     function _updatePurchasingState(
         address _beneficiary
     )
         internal
     {
-        lockAddress(_beneficiary, uint64(10 minutes));
+        _buffToken.timeLockFromPresale(_beneficiary);
     }
 
-    /**
-    * @dev Override to extend the way in which ether is converted to tokens.
-    * @param _weiAmount Value in wei to be converted into tokens
-    * @return Number of tokens that can be purchased with the specified _weiAmount
-    */
     function _getTokenAmount(uint256 _weiAmount)
         internal view returns (uint256)
     {
         return _weiAmount.mul(_rate);
     }
 
-    /**
-    * @dev Determines how ETH is stored/forwarded on purchases.
-    */
     function _forwardFunds() internal {
         _wallet.transfer(msg.value);
     }

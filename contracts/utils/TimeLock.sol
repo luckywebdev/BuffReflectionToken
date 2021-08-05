@@ -11,10 +11,7 @@ abstract contract TimeLock is Ownable {
     
     mapping(address => LockedAddress) private _lockedList;
     mapping (address => bool) private _isExlcludeFromLock;
-    constructor () {
-        _isExlcludeFromLock[owner()] = true;
-    }
-
+    constructor () { }
     function lockAddress(address _lockAddress, uint64 lockTime) internal virtual {
         require(_lockAddress != address(0), "ERR: zero lock address");
         require(lockTime > 0, "ERR: zero lock period");
@@ -26,30 +23,30 @@ abstract contract TimeLock is Ownable {
 
     function lockedRelease(address _lockAddress) internal virtual {
         require(_lockAddress != address(0), "ERR: zero lock address");
-        require(!_isExlcludeFromLock[_lockAddress], 'ERR: address excluded from lock');
+        if (_isExlcludeFromLock[_lockAddress]) return;
 
         delete _lockedList[_lockAddress];
     }
 
     function checkRemainTime(address _lockAddress) internal view virtual returns (uint) {
         require(_lockAddress != address(0), "ERR: zero lock address");
-        require(!_isExlcludeFromLock[_lockAddress], 'ERR: address excluded from lock');
-        require(_lockedList[_lockAddress].endTime != 0, 'ERR: no locked address');
+        if (_isExlcludeFromLock[_lockAddress]) return 0;
+        if (_lockedList[_lockAddress].endTime == 0) return 0;
         if(_lockedList[_lockAddress].endTime > uint64(block.timestamp)) {
             return _lockedList[_lockAddress].endTime - uint64(block.timestamp);
         }
         return 0;
     }
 
-    function isLocked(address _lockAddress) internal view virtual returns (bool) {
+    function isUnLocked(address _lockAddress) internal view virtual returns (bool) {
         require(_lockAddress != address(0), "ERR: zero lock address");
-        require(!_isExlcludeFromLock[_lockAddress], 'ERR: address excluded from lock');
+        if (_isExlcludeFromLock[_lockAddress]) return true;
         return _lockedList[_lockAddress].endTime < uint64(block.timestamp);
     }
 
     function excludeFromLock(address _lockAddress) internal virtual {
         require(_lockAddress != address(0), "ERR: zero lock address");
-        require(!_isExlcludeFromLock[_lockAddress], 'ERR: address excluded from lock already');
+        if (_isExlcludeFromLock[_lockAddress]) return;
         _isExlcludeFromLock[_lockAddress] = true;
     }
 }
