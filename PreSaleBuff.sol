@@ -3,7 +3,7 @@ pragma solidity ^0.8.4;
 
 import "./utils/Ownable.sol";
 import "./utils/SafeMath.sol";
-import "./Official_BuffDoge.sol";
+import "./OfficialBuffDoge.sol";
 
 /**
  * @notice ERC20 token PreSale contract
@@ -11,7 +11,7 @@ import "./Official_BuffDoge.sol";
 contract PreSaleBuff is Ownable {
     using SafeMath for uint256;
 
-    Official_BuffDoge private _buffToken;
+    OfficialBuffDoge private _buffToken;
 
     // Address where funds are collected
     address payable public _wallet;
@@ -46,7 +46,7 @@ contract PreSaleBuff is Ownable {
         require(rate > 0);
         require(wallet != address(0));
         require(buffToken != address(0));
-        _buffToken = Official_BuffDoge(buffToken);
+        _buffToken = OfficialBuffDoge(buffToken);
         _rate = rate;
         _wallet = wallet;
         _paused = true;
@@ -110,7 +110,7 @@ contract PreSaleBuff is Ownable {
         uint256 tokens = _getTokenAmount(_weiAmount);
         require(tokens <= tokenBalance, 'ERR: Exceed presale plan');
         require(_tokenPurchased[_beneficiary].add(tokens) <= 1e7 ether, 'ERR: Exceed presale plan Buff');
-        _buffToken.timeLockReleaseForPresale(_beneficiary);
+        // _buffToken.timeLockReleaseForPresale(_beneficiary);
     }
 
     function _deliverTokens(
@@ -138,7 +138,7 @@ contract PreSaleBuff is Ownable {
     )
         internal
     {
-        _buffToken.timeLockFromPresale(_beneficiary);
+        // _buffToken.timeLockFromPresale(_beneficiary);
     }
 
     function _getTokenAmount(uint256 _weiAmount)

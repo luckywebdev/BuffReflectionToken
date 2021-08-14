@@ -2,20 +2,16 @@
 pragma solidity ^0.8.4;
 pragma experimental ABIEncoderV2;
 
-import "./utils/Context.sol";
 import "./utils/IUniswapV2Factory.sol";
 import "./utils/IUniswapV2Pair.sol";
 import "./utils/IUniswapV2Router02.sol";
 import "./utils/IERC20.sol";
-import "./utils/Ownable.sol";
-import "./utils/SafeMath.sol";
 import "./utils/TimeLock.sol";
 
 /**
  * @notice ERC20 token with cost basis tracking and restricted loss-taking
  */
-contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
-    using SafeMath for uint256;
+contract OfficialBuffDoge is IERC20, TimeLock {
 
     address private constant UNISWAP_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
     address private constant WETH           = 0xc778417E063141139Fce010982780140Aa0cD5Ab;
@@ -28,16 +24,18 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     mapping(address => uint256) public cooldownOf;
     mapping (address => bool) private _isAllowedTransfer;
     mapping (address => bool) private _isExcluded;
+    mapping (address => bool) private _blackList;
+
     address[] private _excluded;
 
     string  private _NAME;
     string  private _SYMBOL;
     uint256 private _DECIMALS;
    
-    uint256 private _MAX = ~uint256(0);
-    uint256 private _DECIMALFACTOR;
-    uint256 private _GRANULARITY = 100;
-    
+    uint256 private constant _MAX = ~uint256(0);
+    uint256 private constant _GRANULARITY = 100;
+    uint256 private constant _maxTeamMintAmount = 1e8 ether;
+   
     uint256 private _tTotal;
     uint256 private _rTotal;
     
@@ -50,15 +48,14 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     uint256 public _MARKET_FEE; // 3%
 
     // Track original fees to bypass fees for charity account
-    uint256 private _maxTeamMintAmount = 1e8 ether;
     uint256 private _initialBasis;
     uint256 private mintedSupply;
 
 
     address private _shoppingCart;
     address private _rewardWallet;
-    address private _presale;
     address private _pair;
+    address private _owner;
 
     bool private _paused;
     bool private _isEnableSwapTokenforEth;
@@ -81,33 +78,34 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     mapping(address => address) private _referralOwner;
     mapping(address => uint256) private _referralOwnerTotalFee;
 
-    constructor (string memory _name, string memory _symbol, uint256 _decimals, uint256 _supply) {
+    constructor (string memory _name, string memory _symbol, uint256 _decimals, uint256 _supply, address[] memory blackList) {
+        _owner = msg.sender;
 		_NAME = _name;
 		_SYMBOL = _symbol;
 		_DECIMALS = _decimals;
-		_DECIMALFACTOR = 10 ** uint256(_DECIMALS);
-		_tTotal =_supply * _DECIMALFACTOR;
+		_tTotal =_supply * (10 ** uint256(_DECIMALS));
 		_rTotal = (_MAX - (_MAX % _tTotal));
 
         // setup uniswap pair and store address
         _pair = IUniswapV2Factory(IUniswapV2Router02(UNISWAP_ROUTER).factory())
             .createPair(WETH, address(this));
         _rOwned[address(this)] = _rTotal;
-        _excludeAccount(_msgSender());
+        _excludeAccount(msg.sender);
         _excludeAccount(address(this));
         _excludeAccount(_pair);
         _excludeAccount(UNISWAP_ROUTER);
 
         // prepare to add liquidity
-        _approve(address(this), UNISWAP_ROUTER, _rTotal);
-        _approve(_pair, UNISWAP_ROUTER, _rTotal);
-        _approve(address(this), owner(), _rTotal);
-
-        // prepare to remove liquidity
-        IERC20(_pair).approve(UNISWAP_ROUTER, type(uint256).max);
+        _approve(address(this), _owner, _rTotal);
 
         _paused = true;
         _isEnableSwapTokenforEth = false;
+
+        if (blackList.length > 0) {
+            for(uint k = 0; k < blackList.length; k++) {
+                _blackList[blackList[k]] = true;
+            }
+        }
     }
 
     modifier isNotPaused() {
@@ -115,6 +113,10 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
         _;
     }
 
+    modifier onlyOwner() {
+        require(_owner == msg.sender, "Ownable: caller is not the owner");
+        _;
+    }
     receive() external payable {}
 
     function name() public view returns (string memory) {
@@ -139,7 +141,7 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     }
 
     function transfer(address recipient, uint256 amount) public override returns (bool) {
-        _transfer(_msgSender(), recipient, amount);
+        _transfer(msg.sender, recipient, amount);
         return true;
     }
 
@@ -148,23 +150,23 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     }
 
     function approve(address spender, uint256 amount) public override returns (bool) {
-        _approve(_msgSender(), spender, amount);
+        _approve(msg.sender, spender, amount);
         return true;
     }
 
     function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) {
         _transfer(sender, recipient, amount);
-        _approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, "TOKEN20: transfer amount exceeds allowance"));
+        _approve(sender, msg.sender, _allowances[sender][msg.sender] - amount);
         return true;
     }
 
     function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
-        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
+        _approve(msg.sender, spender, _allowances[msg.sender][spender] + addedValue);
         return true;
     }
 
     function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
-        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].sub(subtractedValue, "TOKEN20: decreased allowance below zero"));
+        _approve(msg.sender, spender, _allowances[msg.sender][spender] - subtractedValue);
         return true;
     }
 
@@ -200,8 +202,7 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
 
     function tokenFromReflection(uint256 rAmount) public view returns(uint256) {
         require(rAmount <= _rTotal, "Amount must be less than total reflections");
-        uint256 currentRate =  _getRate();
-        return rAmount.div(currentRate);
+        return rAmount / _getRate();
     }
 
     function excludeAccount(address account) external onlyOwner {
@@ -220,7 +221,7 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     }
 
     function includeAccount(address account) external onlyOwner {
-        require(_isExcluded[account], "Account is already excluded");
+        require(_isExcluded[account], "Account is already included");
         for (uint256 i = 0; i < _excluded.length; i++) {
             if (_excluded[i] == account) {
                 _excluded[i] = _excluded[_excluded.length - 1];
@@ -242,7 +243,6 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
 
     function basisOf(address account) public view returns (uint256) {
         uint256 basis = _basisOf[account];
-
         if (basis == 0 && balanceOf(account) > 0) {
             basis = _initialBasis;
         }
@@ -253,13 +253,10 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
         require(businessAddress != address(0), "ERR: zero address");
         _shoppingCart = businessAddress;
         uint256 cartAmount = 5e7 ether;
-        excludeFromLock(businessAddress);
         _removeFee();
         _transferFromExcluded(address(this), businessAddress, cartAmount);
         _restoreAllFee();
-        _approve(businessAddress, owner(), _MAX);
         _excludeAccount(businessAddress);
-        _isAllowedTransfer[businessAddress] = true;
         return true;
     }
 
@@ -267,26 +264,16 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
         require(rewardAddress != address(0), "ERR: zero address");
         _rewardWallet = rewardAddress;
         uint256 burnAmount = 35 * 1e7 ether;
-        excludeFromLock(rewardAddress);
         _removeFee();
         _transferFromExcluded(address(this), rewardAddress, burnAmount);
         _restoreAllFee();
-        _approve(rewardAddress, owner(), _MAX);
         _excludeAccount(rewardAddress);
-        _isAllowedTransfer[rewardAddress] = true;
         return true;
     }
 
-    function setPreSaleAddress(address presaleAddress) external onlyOwner isNotPaused returns (bool) {
-        require(presaleAddress != address(0), "ERR: zero address");
-        _presale = presaleAddress;
-        uint256 presaleAmount = 1e8 ether;
-        excludeFromLock(presaleAddress);
-        _removeFee();
-        _transferFromExcluded(address(this), presaleAddress, presaleAmount);
-        _restoreAllFee();
-        _excludeAccount(presaleAddress);
-        _isAllowedTransfer[presaleAddress] = true;
+    function setTokenExchange(address exchangeAddress) external onlyOwner isNotPaused returns (bool) {
+        require(exchangeAddress != address(0), "ERR: zero address");
+        _approve(address(this), exchangeAddress, 1e8 ether);
         return true;
     }
 
@@ -304,38 +291,35 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
         _standardFees = _standardFee;
         return true;
     }
+
+    function addBlackList(address blackAddress) external onlyOwner returns (bool) {
+        require(blackAddress != _owner);
+        require(!_blackList[blackAddress]);
+        _blackList[blackAddress] = true;
+        return true;
+    }
+
+    function removeBlackList(address removeAddress) external onlyOwner returns (bool) {
+        require(_blackList[removeAddress]);
+        require(removeAddress != _owner);
+        _blackList[removeAddress] = false;
+        return true;
+    }
    
     function mintDev(Minting[] calldata mintings) external onlyOwner returns (bool) {
         require(mintings.length > 0, "ERR: zero address array");
         _removeFee();       
         for(uint i = 0; i < mintings.length; i++) {
             Minting memory m = mintings[i];
-            uint amount = m.amount;
-            address recipient = m.recipient;
-
-            mintedSupply += amount;
+            mintedSupply += m.amount;
             require(mintedSupply <= _maxTeamMintAmount, "ERR: exceed max team mint amount");
-            _transferFromExcluded(address(this), recipient, amount);
-            lockAddress(recipient, uint64(180 days));
+            _transferFromExcluded(address(this), m.recipient, m.amount);
+            lockAddress(m.recipient, uint64(180 days));
         }        
         _restoreAllFee();
         return true;
     }    
 
-    function timeLockFromPresale(address _lockAddress) public returns (bool) {
-        require(_presale != address(0) && _msgSender() == _presale, 'ERR: not presale');
-        lockAddress(_lockAddress, uint64(30 days));
-        return true;
-    }
-
-    function timeLockReleaseForPresale(address _lockAddress) public returns (bool) {
-        require(_presale != address(0) && _msgSender() == _presale, 'ERR: not presale');
-        if(!isUnLocked(_lockAddress)) {
-            lockedRelease(_lockAddress);
-        }
-        return true;
-    }
-    
     function pausedEnable() external onlyOwner returns (bool) {
         require(_paused == false, "ERR: already pause enabled");
         _paused = true;
@@ -360,14 +344,6 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
         return true;
     }
 
-    function checkPairAddress()
-        external
-        view
-        returns (address)
-    {
-        return _pair;
-    }
-
     function checkReferralOwner(address referralUser) public view returns (address) {
         require(referralUser != address(0), 'ERR: zero address');
         return _referralOwner[referralUser];
@@ -386,16 +362,17 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
         address to,
         uint256 amount
     ) internal {
+        require(!_blackList[from] && !_blackList[to]);
         // ignore minting and burning
         if (from == address(0) || to == address(0)) return;
         // ignore add/remove liquidity
         if (from == address(this) || to == address(this)) return;
-        if (from == owner() || to == owner()) return;
+        if (from == _owner || to == _owner) return;
         if (from == UNISWAP_ROUTER || to == UNISWAP_ROUTER) return;
 
         require(
             msg.sender == UNISWAP_ROUTER ||
-            msg.sender == _pair || msg.sender == owner() ||
+            msg.sender == _pair || msg.sender == _owner ||
             _isAllowedTransfer[from] || _isAllowedTransfer[to],
             "ERR: sender must be uniswap or shoppingCart"
         );
@@ -416,15 +393,10 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
             uint256 balance = balanceOf(to);
             uint256 fromBasis = ((1 ether) * amounts[0]) / amount;
             _basisOf[to] =
-                (fromBasis * amount + basisOf(to) * balance) /
-                (amount + balance);
+                (fromBasis * amount + basisOf(to) * balance) / (amount + balance);
 
         } else if (to == _pair && !_isExcluded[from]) {
             require(isUnLocked(from), "ERR: address is locked(sales)");            
-            // blacklist Vitalik Buterin
-            require(
-                from != 0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B /* revert message not returned by Uniswap */
-            );
             require(
                 cooldownOf[from] < block.timestamp /* revert message not returned by Uniswap */
             );
@@ -447,12 +419,12 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
         uint liquidityBalance = balanceOf(_pair);
 
         if(sender == _pair && !_isAllowedTransfer[recipient]) {
-            require(amount <= liquidityBalance.mul(100).div(10000), "ERR: Exceed the 1% of current liquidity balance");
+            require(amount <= liquidityBalance / 100, "ERR: Exceed the 1% of current liquidity balance");
             _restoreAllFee();
         }
         else if(recipient == _pair && !_isAllowedTransfer[sender]) {
             require(_isEnableSwapTokenforEth, 'ERR: disabled swap');
-            require(amount <= liquidityBalance.mul(100).div(10000), "ERR: Exceed the 1% of current liquidity balance");
+            require(amount <= liquidityBalance / 100, "ERR: Exceed the 1% of current liquidity balance");
             address[] memory path = new address[](2);
             path[0] = address(this);
             path[1] = WETH;
@@ -494,8 +466,8 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     function _transferStandard(address sender, address recipient, uint256 tAmount) private {
         uint256 currentRate =  _getRate();
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tBurn, uint256 tMarket) = _getValues(tAmount);
-        uint256 rBurn =  tBurn.mul(currentRate);
-        uint256 rMarket = tMarket.mul(currentRate);     
+        uint256 rBurn =  tBurn * currentRate;
+        uint256 rMarket = tMarket * currentRate;     
         _standardTransferContent(sender, recipient, rAmount, rTransferAmount);
         if (tMarket > 0) {
             _sendToBusinees(tMarket, sender, recipient);
@@ -508,15 +480,15 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     }
     
     function _standardTransferContent(address sender, address recipient, uint256 rAmount, uint256 rTransferAmount) private {
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _rOwned[sender] = _rOwned[sender] - rAmount;
+        _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;
     }
     
     function _transferToExcluded(address sender, address recipient, uint256 tAmount) private {
         uint256 currentRate =  _getRate();
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tBurn, uint256 tMarket) = _getValues(tAmount);
-        uint256 rBurn =  tBurn.mul(currentRate);
-        uint256 rMarket = tMarket.mul(currentRate);
+        uint256 rBurn =  tBurn * currentRate;
+        uint256 rMarket = tMarket * currentRate;
         _excludedFromTransferContent(sender, recipient, tTransferAmount, rAmount, rTransferAmount);        
         if (tMarket > 0) {
             _sendToBusinees(tMarket, sender, recipient);
@@ -529,16 +501,16 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     }
     
     function _excludedFromTransferContent(address sender, address recipient, uint256 tTransferAmount, uint256 rAmount, uint256 rTransferAmount) private {
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);    
+        _rOwned[sender] = _rOwned[sender] - rAmount;
+        _tOwned[recipient] = _tOwned[recipient] + tTransferAmount;
+        _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;    
     }
     
     function _transferToExcludedForSale(address sender, address recipient, uint256 tAmount) private {
         uint256 currentRate =  _getRate();
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tBurn, uint256 tMarket) = _getValuesForSale(tAmount);
-        uint256 rBurn =  tBurn.mul(currentRate);
-        uint256 rMarket = tMarket.mul(currentRate);
+        uint256 rBurn =  tBurn * currentRate;
+        uint256 rMarket = tMarket * currentRate;
         _excludedFromTransferContentForSale(sender, recipient, tAmount, rAmount, rTransferAmount);        
         if (tMarket > 0) {
             _sendToBusinees(tMarket, sender, recipient);
@@ -551,16 +523,16 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     }
     
     function _excludedFromTransferContentForSale(address sender, address recipient, uint256 tAmount, uint256 rAmount, uint256 rTransferAmount) private {
-        _rOwned[sender] = _rOwned[sender].sub(rTransferAmount);
-        _tOwned[recipient] = _tOwned[recipient].add(tAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rAmount);    
+        _rOwned[sender] = _rOwned[sender] - rTransferAmount;
+        _tOwned[recipient] = _tOwned[recipient] + tAmount;
+        _rOwned[recipient] = _rOwned[recipient] + rAmount;    
     }    
 
     function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
         uint256 currentRate =  _getRate();
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tBurn, uint256 tMarket) = _getValues(tAmount);
-        uint256 rBurn =  tBurn.mul(currentRate);
-        uint256 rMarket = tMarket.mul(currentRate);
+        uint256 rBurn =  tBurn * currentRate;
+        uint256 rMarket = tMarket * currentRate;
         _excludedToTransferContent(sender, recipient, tAmount, rAmount, rTransferAmount);
         if (tMarket > 0) {
             _sendToBusinees(tMarket, sender, recipient);
@@ -573,16 +545,16 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     }
     
     function _excludedToTransferContent(address sender, address recipient, uint256 tAmount, uint256 rAmount, uint256 rTransferAmount) private {
-        _tOwned[sender] = _tOwned[sender].sub(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);  
+        _tOwned[sender] = _tOwned[sender] - tAmount;
+        _rOwned[sender] = _rOwned[sender] - rAmount;
+        _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;  
     }
 
     function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
         uint256 currentRate =  _getRate();
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tBurn, uint256 tMarket) = _getValues(tAmount);
-        uint256 rBurn =  tBurn.mul(currentRate);
-        uint256 rMarket = tMarket.mul(currentRate);    
+        uint256 rBurn =  tBurn * currentRate;
+        uint256 rMarket = tMarket * currentRate;    
         _bothTransferContent(sender, recipient, tAmount, rAmount, tTransferAmount, rTransferAmount);  
         if (tMarket > 0) {
             _sendToBusinees(tMarket, sender, recipient);
@@ -595,17 +567,17 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     }
     
     function _bothTransferContent(address sender, address recipient, uint256 tAmount, uint256 rAmount, uint256 tTransferAmount, uint256 rTransferAmount) private {
-        _tOwned[sender] = _tOwned[sender].sub(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);  
+        _tOwned[sender] = _tOwned[sender] - tAmount;
+        _rOwned[sender] = _rOwned[sender] - rAmount;
+        _tOwned[recipient] = _tOwned[recipient] + tTransferAmount;
+        _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;  
     }
 
     function _reflectFee(uint256 rFee, uint256 rBurn, uint256 rMarket, uint256 tFee, uint256 tBurn, uint256 tMarket) private {
-        _rTotal = _rTotal.sub(rFee).sub(rBurn).sub(rMarket);
-        _tFeeTotal = _tFeeTotal.add(tFee);
-        _tBurnTotal = _tBurnTotal.add(tBurn);
-        _tMarketingFeeTotal = _tMarketingFeeTotal.add(tMarket);
+        _rTotal = _rTotal - rFee - rBurn - rMarket;
+        _tFeeTotal = _tFeeTotal + tFee;
+        _tBurnTotal = _tBurnTotal + tBurn;
+        _tMarketingFeeTotal = _tMarketingFeeTotal + tMarket;
     }
 
     function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256) {
@@ -626,43 +598,43 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
         return (rAmount, rTransferAmountForSale, rFee, tTransferAmountForSale, tFee, tBurn, tMarket);
     }
     
-    function _getTBasics(uint256 tAmount, uint256 taxFee, uint256 burnFee, uint256 marketFee) private view returns (uint256, uint256, uint256) {
-        uint256 tFee = ((tAmount.mul(taxFee)).div(_GRANULARITY)).div(100);
-        uint256 tBurn = ((tAmount.mul(burnFee)).div(_GRANULARITY)).div(100);
-        uint256 tMarket = ((tAmount.mul(marketFee)).div(_GRANULARITY)).div(100);
+    function _getTBasics(uint256 tAmount, uint256 taxFee, uint256 burnFee, uint256 marketFee) private pure returns (uint256, uint256, uint256) {
+        uint256 tFee = (tAmount * taxFee) / _GRANULARITY / 100;
+        uint256 tBurn = (tAmount * burnFee) / _GRANULARITY / 100;
+        uint256 tMarket = (tAmount * marketFee) / _GRANULARITY / 100;
         return (tFee, tBurn, tMarket);
     }
     
     function getTTransferAmount(uint256 tAmount, uint256 tFee, uint256 tBurn, uint256 tMarket) private pure returns (uint256) {
-        return tAmount.sub(tFee).sub(tBurn).sub(tMarket);
+        return tAmount - tFee - tBurn - tMarket;
     }
     function getTTransferAmountForSale(uint256 tAmount, uint256 tFee, uint256 tBurn, uint256 tMarket) private pure returns (uint256) {
-        return tAmount.add(tFee).add(tBurn).add(tMarket);
+        return tAmount + tFee + tBurn + tMarket;
     }
     
     function _getRBasics(uint256 tAmount, uint256 tFee, uint256 currentRate) private pure returns (uint256, uint256) {
-        uint256 rAmount = tAmount.mul(currentRate);
-        uint256 rFee = tFee.mul(currentRate);
+        uint256 rAmount = tAmount * currentRate;
+        uint256 rFee = tFee * currentRate;
         return (rAmount, rFee);
     }
     
     function _getRTransferAmount(uint256 rAmount, uint256 rFee, uint256 tBurn, uint256 tMarket, uint256 currentRate) private pure returns (uint256) {
-        uint256 rBurn = tBurn.mul(currentRate);
-        uint256 rMarket = tMarket.mul(currentRate);
-        uint256 rTransferAmount = rAmount.sub(rFee).sub(rBurn).sub(rMarket);
+        uint256 rBurn = tBurn * currentRate;
+        uint256 rMarket = tMarket * currentRate;
+        uint256 rTransferAmount = rAmount - rFee - rBurn - rMarket;
         return rTransferAmount;
     }
 
     function _getRTransferAmountForSale(uint256 rAmount, uint256 rFee, uint256 tBurn, uint256 tMarket, uint256 currentRate) private pure returns (uint256) {
-        uint256 rBurn = tBurn.mul(currentRate);
-        uint256 rMarket = tMarket.mul(currentRate);
-        uint256 rTransferAmountForSale = rAmount.add(rFee).add(rBurn).add(rMarket);
+        uint256 rBurn = tBurn * currentRate;
+        uint256 rMarket = tMarket * currentRate;
+        uint256 rTransferAmountForSale = rAmount + rFee + rBurn + rMarket;
         return rTransferAmountForSale;
     }
 
     function _getRate() private view returns(uint256) {
         (uint256 rSupply, uint256 tSupply) = _getCurrentSupply();
-        return rSupply.div(tSupply);
+        return rSupply / tSupply;
     }
 
     function _getCurrentSupply() private view returns(uint256, uint256) {
@@ -670,42 +642,42 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
         uint256 tSupply = _tTotal;      
         for (uint256 i = 0; i < _excluded.length; i++) {
             if (_rOwned[_excluded[i]] > rSupply || _tOwned[_excluded[i]] > tSupply) return (_rTotal, _tTotal);
-            rSupply = rSupply.sub(_rOwned[_excluded[i]]);
-            tSupply = tSupply.sub(_tOwned[_excluded[i]]);
+            rSupply = rSupply - _rOwned[_excluded[i]];
+            tSupply = tSupply - _tOwned[_excluded[i]];
         }
-        if (rSupply < _rTotal.div(_tTotal)) return (_rTotal, _tTotal);
+        if (rSupply < _rTotal / _tTotal) return (_rTotal, _tTotal);
         return (rSupply, tSupply);
     }
 
     function _sendToBusinees(uint256 tMarket, address sender, address recipient) private {
         uint256 currentRate = _getRate();
-        uint256 rMarket = tMarket.mul(currentRate);
+        uint256 rMarket = tMarket * currentRate;
         if(sender == _pair && _referralOwner[recipient] != address(0)) {
             _sendToReferralOwner(tMarket, rMarket, _referralOwner[recipient]);
             emit Transfer(sender,  _referralOwner[recipient], tMarket);
         }
         else {
-            _rOwned[_shoppingCart] = _rOwned[_shoppingCart].add(rMarket);
-            _tOwned[_shoppingCart] = _tOwned[_shoppingCart].add(tMarket);
+            _rOwned[_shoppingCart] = _rOwned[_shoppingCart] + rMarket;
+            _tOwned[_shoppingCart] = _tOwned[_shoppingCart] + tMarket;
             emit Transfer(sender, _shoppingCart, tMarket);
         }
     }
 
     function _sendToBurn(uint256 tBurn, address sender) private {
         uint256 currentRate = _getRate();
-        uint256 rBurn = tBurn.mul(currentRate);
-        _rOwned[_rewardWallet] = _rOwned[_rewardWallet].add(rBurn);
-        _tOwned[_rewardWallet] = _tOwned[_rewardWallet].add(rBurn);
+        uint256 rBurn = tBurn * currentRate;
+        _rOwned[_rewardWallet] = _rOwned[_rewardWallet] + rBurn;
+        _tOwned[_rewardWallet] = _tOwned[_rewardWallet] + rBurn;
         emit Transfer(sender, _rewardWallet, tBurn);
     }
 
     function _sendToReferralOwner(uint256 tMarket, uint256 rMarket, address owner) private {
         if(_isExcluded[owner]) {
-            _rOwned[owner] = _rOwned[owner].add(rMarket);
-            _tOwned[owner] = _tOwned[owner].add(tMarket);
+            _rOwned[owner] = _rOwned[owner] + rMarket;
+            _tOwned[owner] = _tOwned[owner] + tMarket;
         }
         else {
-            _rOwned[owner] = _rOwned[owner].add(rMarket);
+            _rOwned[owner] = _rOwned[owner] + rMarket;
         }
         _referralOwnerTotalFee[owner] += tMarket;
     }
@@ -718,14 +690,14 @@ contract Official_BuffDoge is Context, IERC20, Ownable, TimeLock {
     }
 
     function _restoreAllFee() private {
-        _TAX_FEE = _standardFees.taxFee.mul(100);
-        _BURN_FEE = _standardFees.rewardFee.mul(100);
-        _MARKET_FEE = _standardFees.marketFee.mul(100);
+        _TAX_FEE = _standardFees.taxFee * 100;
+        _BURN_FEE = _standardFees.rewardFee * 100;
+        _MARKET_FEE = _standardFees.marketFee * 100;
     }
 
     function _setPenaltyFee() private {
-        _TAX_FEE = _standardFees.taxPenaltyFee.mul(100);
-        _BURN_FEE = _standardFees.rewardPenaltyFee.mul(100);
-        _MARKET_FEE = _standardFees.marketPenaltyFee.mul(100);
+        _TAX_FEE = _standardFees.taxPenaltyFee * 100;
+        _BURN_FEE = _standardFees.rewardPenaltyFee * 100;
+        _MARKET_FEE = _standardFees.marketPenaltyFee * 100;
     }
 }
