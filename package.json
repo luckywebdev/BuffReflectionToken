@@ -4,8 +4,8 @@
   "description": "SEO Token contract",
   "main": "truffle-config.js",
   "keywords": [
-    "seo-token",
-    "seo"
+    "buff-token",
+    "buff"
   ],
   "directories": {
     "test": "test"

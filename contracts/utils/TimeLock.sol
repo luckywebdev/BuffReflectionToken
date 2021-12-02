@@ -20,13 +20,6 @@ abstract contract TimeLock {
         }
     }
 
-    function lockedRelease(address _lockAddress) internal virtual {
-        require(_lockAddress != address(0), "ERR: zero lock address");
-        if (_isExlcludeFromLock[_lockAddress]) return;
-
-        delete _lockedList[_lockAddress];
-    }
-
     function isUnLocked(address _lockAddress) internal view virtual returns (bool) {
         require(_lockAddress != address(0), "ERR: zero lock address");
         if (_isExlcludeFromLock[_lockAddress]) return true;

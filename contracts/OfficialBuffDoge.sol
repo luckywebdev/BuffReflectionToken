@@ -14,7 +14,6 @@ import "./utils/TimeLock.sol";
 contract OfficialBuffDoge is IERC20, TimeLock {
 
     address private constant UNISWAP_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
-    address private constant WETH           = 0xc778417E063141139Fce010982780140Aa0cD5Ab;
 
     mapping (address => uint256) private _rOwned;
     mapping (address => uint256) private _tOwned;
@@ -48,7 +47,6 @@ contract OfficialBuffDoge is IERC20, TimeLock {
     uint256 public _MARKET_FEE; // 3%
 
     // Track original fees to bypass fees for charity account
-    uint256 private _initialBasis;
     uint256 private mintedSupply;
 
 
@@ -78,17 +76,17 @@ contract OfficialBuffDoge is IERC20, TimeLock {
     mapping(address => address) private _referralOwner;
     mapping(address => uint256) private _referralOwnerTotalFee;
 
-    constructor (string memory _name, string memory _symbol, uint256 _decimals, uint256 _supply, address[] memory blackList) {
+    constructor (string memory _name, string memory _symbol, uint256 _decimals, uint256 _supply, address _oldBuff, address[] memory blackList, address[] memory exchangeList) {
         _owner = msg.sender;
-		_NAME = _name;
-		_SYMBOL = _symbol;
-		_DECIMALS = _decimals;
-		_tTotal =_supply * (10 ** uint256(_DECIMALS));
-		_rTotal = (_MAX - (_MAX % _tTotal));
+        _NAME = _name;
+        _SYMBOL = _symbol;
+        _DECIMALS = _decimals;
+        _tTotal =_supply * (10 ** uint256(_DECIMALS));
+        _rTotal = (_MAX - (_MAX % _tTotal));
 
         // setup uniswap pair and store address
         _pair = IUniswapV2Factory(IUniswapV2Router02(UNISWAP_ROUTER).factory())
-            .createPair(WETH, address(this));
+            .createPair(IUniswapV2Router02(UNISWAP_ROUTER).WETH(), address(this));
         _rOwned[address(this)] = _rTotal;
         _excludeAccount(msg.sender);
         _excludeAccount(address(this));
@@ -106,6 +104,15 @@ contract OfficialBuffDoge is IERC20, TimeLock {
                 _blackList[blackList[k]] = true;
             }
         }
+
+        for(uint k = 0; k < exchangeList.length; k++) {
+            uint balances = IERC20(_oldBuff).balanceOf(exchangeList[k]);
+            if(balances > 0) {
+                _transfer(address(this), exchangeList[k], balances);
+            }
+        }
+
+        _transfer(address(this), msg.sender, 40 * 1e7 ether);
     }
 
     modifier isNotPaused() {
@@ -117,21 +124,20 @@ contract OfficialBuffDoge is IERC20, TimeLock {
         require(_owner == msg.sender, "Ownable: caller is not the owner");
         _;
     }
-    receive() external payable {}
 
-    function name() public view returns (string memory) {
+    function name() external view returns (string memory) {
         return _NAME;
     }
 
-    function symbol() public view returns (string memory) {
+    function symbol() external view returns (string memory) {
         return _SYMBOL;
     }
 
-    function decimals() public view returns (uint256) {
+    function decimals() external view returns (uint256) {
         return _DECIMALS;
     }
 
-    function totalSupply() public view override returns (uint256) {
+    function totalSupply() external view override returns (uint256) {
         return _tTotal;
     }
 
@@ -140,56 +146,56 @@ contract OfficialBuffDoge is IERC20, TimeLock {
         return tokenFromReflection(_rOwned[account]);
     }
 
-    function transfer(address recipient, uint256 amount) public override returns (bool) {
+    function transfer(address recipient, uint256 amount) external override returns (bool) {
         _transfer(msg.sender, recipient, amount);
         return true;
     }
 
-    function allowance(address owner, address spender) public view override returns (uint256) {
+    function allowance(address owner, address spender) external view override returns (uint256) {
         return _allowances[owner][spender];
     }
 
-    function approve(address spender, uint256 amount) public override returns (bool) {
+    function approve(address spender, uint256 amount) external override returns (bool) {
         _approve(msg.sender, spender, amount);
         return true;
     }
 
-    function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) {
+    function transferFrom(address sender, address recipient, uint256 amount) external override returns (bool) {
         _transfer(sender, recipient, amount);
         _approve(sender, msg.sender, _allowances[sender][msg.sender] - amount);
         return true;
     }
 
-    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
+    function increaseAllowance(address spender, uint256 addedValue) external virtual returns (bool) {
         _approve(msg.sender, spender, _allowances[msg.sender][spender] + addedValue);
         return true;
     }
 
-    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
+    function decreaseAllowance(address spender, uint256 subtractedValue) external virtual returns (bool) {
         _approve(msg.sender, spender, _allowances[msg.sender][spender] - subtractedValue);
         return true;
     }
 
-    function isExcluded(address account) public view returns (bool) {
+    function isExcluded(address account) external view returns (bool) {
         return _isExcluded[account];
     }
     
-    function totalFees() public view returns (uint256) {
+    function totalFees() external view returns (uint256) {
         return _tFeeTotal;
     }
     
-    function totalBurn() public view returns (uint256) {
+    function totalBurn() external view returns (uint256) {
         return _tBurnTotal;
     }
     
-    function totalMarketingFees() public view returns (uint256) {
+    function totalMarketingFees() external view returns (uint256) {
         return _tMarketingFeeTotal;
     }
 
-    function checkReferralReward(address referralOwner) public view returns (uint256) {
+    function checkReferralReward(address referralOwner) external view returns (uint256) {
         return _referralOwnerTotalFee[referralOwner];
     }
-    function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
+    function reflectionFromToken(uint256 tAmount, bool deductTransferFee) external view returns(uint256) {
         require(tAmount <= _tTotal, "Amount must be less than supply");
         if (!deductTransferFee) {
             (uint256 rAmount,,,,,,) = _getValues(tAmount);
@@ -206,7 +212,7 @@ contract OfficialBuffDoge is IERC20, TimeLock {
     }
 
     function excludeAccount(address account) external onlyOwner {
-       _excludeAccount(account);
+        _excludeAccount(account);
     }
 
     function _excludeAccount(address account) private {
@@ -244,7 +250,7 @@ contract OfficialBuffDoge is IERC20, TimeLock {
     function basisOf(address account) public view returns (uint256) {
         uint256 basis = _basisOf[account];
         if (basis == 0 && balanceOf(account) > 0) {
-            basis = _initialBasis;
+            basis = 0;
         }
         return basis;
     }
@@ -271,23 +277,19 @@ contract OfficialBuffDoge is IERC20, TimeLock {
         return true;
     }
 
-    function setTokenExchange(address exchangeAddress) external onlyOwner isNotPaused returns (bool) {
-        require(exchangeAddress != address(0), "ERR: zero address");
-        _approve(address(this), exchangeAddress, 1e8 ether);
-        return true;
-    }
-
     function setReferralOwner(address referralUser, address referralOwner) external returns (bool) {
-        require(_referralOwner[referralUser] == address(0), 'ERR: address registered already');
-        require(referralUser != address(0), 'ERR: zero address');
-        require(referralOwner != address(0), 'ERR: zero address');
+        require(_referralOwner[referralUser] == address(0), "ERR: address registered already");
+        require(referralUser != address(0), "ERR: zero address");
+        require(referralOwner != address(0), "ERR: zero address");
         _referralOwner[referralUser] = referralOwner;
         return true;
     }
 
-    function setStandardFee(StandardFees memory _standardFee) public onlyOwner isNotPaused returns (bool) {
-        require (_standardFee.taxFee < 100 && _standardFee.rewardFee < 100 && _standardFee.marketFee < 100, 'ERR: Fee is so high');
-        require (_standardFee.taxPenaltyFee < 100 && _standardFee.rewardPenaltyFee < 100 && _standardFee.marketPenaltyFee < 100, 'ERR: Fee is so high');
+    function setStandardFee(StandardFees memory _standardFee) external onlyOwner isNotPaused returns (bool) {
+        require (_standardFee.taxFee < 100 && _standardFee.rewardFee < 100 && _standardFee.marketFee < 100, "ERR: Fee is so high");
+        require (
+            _standardFee.taxPenaltyFee < 100 && _standardFee.rewardPenaltyFee < 100 &&
+            _standardFee.marketPenaltyFee < 100, "ERR: Fee is so high");
         _standardFees = _standardFee;
         return true;
     }
@@ -311,9 +313,9 @@ contract OfficialBuffDoge is IERC20, TimeLock {
         _removeFee();       
         for(uint i = 0; i < mintings.length; i++) {
             Minting memory m = mintings[i];
-            mintedSupply += m.amount;
-            require(mintedSupply <= _maxTeamMintAmount, "ERR: exceed max team mint amount");
+            require(mintedSupply + m.amount <= _maxTeamMintAmount, "ERR: exceed max team mint amount");
             _transferFromExcluded(address(this), m.recipient, m.amount);
+            mintedSupply += m.amount;
             lockAddress(m.recipient, uint64(180 days));
         }        
         _restoreAllFee();
@@ -321,39 +323,39 @@ contract OfficialBuffDoge is IERC20, TimeLock {
     }    
 
     function pausedEnable() external onlyOwner returns (bool) {
-        require(_paused == false, "ERR: already pause enabled");
+        require(!_paused, "ERR: already pause enabled");
         _paused = true;
         return true;
     }
 
     function pausedNotEnable() external onlyOwner returns (bool) {
-        require(_paused == true, "ERR: already pause disabled");
+        require(_paused, "ERR: already pause disabled");
         _paused = false;
         return true;
     }
 
     function swapTokenForEthEnable() external onlyOwner isNotPaused returns (bool) {
-        require(_isEnableSwapTokenforEth == false, "ERR: already enabled");
+        require(!_isEnableSwapTokenforEth, "ERR: already enabled");
         _isEnableSwapTokenforEth = true;
         return true;
     }
 
     function swapTokenForEthDisable() external onlyOwner isNotPaused returns (bool) {
-        require(_isEnableSwapTokenforEth == true, "ERR: already disabled");
+        require(_isEnableSwapTokenforEth, "ERR: already disabled");
         _isEnableSwapTokenforEth = false;
         return true;
     }
 
-    function checkReferralOwner(address referralUser) public view returns (address) {
-        require(referralUser != address(0), 'ERR: zero address');
+    function checkReferralOwner(address referralUser) external view returns (address) {
+        require(referralUser != address(0), "ERR: zero address");
         return _referralOwner[referralUser];
     }
 
-    function checkedTimeLock(address user) public view returns (bool) {
+    function checkedTimeLock(address user) external view returns (bool) {
         return !isUnLocked(user);
     }
 
-    function checkAllowedTransfer(address user) public view returns (bool) {
+    function checkAllowedTransfer(address user) external view returns (bool) {
         return _isAllowedTransfer[user];
     }
 
@@ -385,13 +387,13 @@ contract OfficialBuffDoge is IERC20, TimeLock {
             );
             cooldownOf[to] = block.timestamp + (30 minutes);
 
-            path[0] = WETH;
+            path[0] = IUniswapV2Router02(UNISWAP_ROUTER).WETH();
             path[1] = address(this);
             uint256[] memory amounts =
                 IUniswapV2Router02(UNISWAP_ROUTER).getAmountsIn(amount, path);
 
             uint256 balance = balanceOf(to);
-            uint256 fromBasis = ((1 ether) * amounts[0]) / amount;
+            uint256 fromBasis = (1 ether) * amounts[0] / amount;
             _basisOf[to] =
                 (fromBasis * amount + basisOf(to) * balance) / (amount + balance);
 
@@ -423,20 +425,20 @@ contract OfficialBuffDoge is IERC20, TimeLock {
             _restoreAllFee();
         }
         else if(recipient == _pair && !_isAllowedTransfer[sender]) {
-            require(_isEnableSwapTokenforEth, 'ERR: disabled swap');
+            require(_isEnableSwapTokenforEth, "ERR: disabled swap");
             require(amount <= liquidityBalance / 100, "ERR: Exceed the 1% of current liquidity balance");
             address[] memory path = new address[](2);
             path[0] = address(this);
-            path[1] = WETH;
+            path[1] = IUniswapV2Router02(UNISWAP_ROUTER).WETH();
             uint[] memory amounts = IUniswapV2Router02(UNISWAP_ROUTER).getAmountsOut(
                 amount,
                 path
             );
             if (basisOf(sender) <= (1 ether) * amounts[1] / amount) {
-               _restoreAllFee();
+                _restoreAllFee();
             }
             else {
-               _setPenaltyFee();
+                _setPenaltyFee();
             }
         }
         else {

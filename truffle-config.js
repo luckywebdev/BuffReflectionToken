@@ -10,8 +10,12 @@ module.exports = {
   networks: {
     development: {
       host: "127.0.0.1",
-      port: 7545,
-      network_id: "*",
+      port: 8545,
+      network_id: "999",
+      gas: 11000000,
+      gasPrice: 42000000000,
+      networkCheckTimeout: 10000000,
+      timeoutBlocks: 200,
     },
     main: {
       provider: () =>
@@ -20,8 +24,8 @@ module.exports = {
           `wss://mainnet.infura.io/ws/v3/${infuraKey}`
         ),
       network_id: 1,
-      gas: 1100000,
-      gasPrice: 32000000000,
+      gas: 11000000,
+      gasPrice: 70000000000,
       networkCheckTimeout: 10000000,
       confirmations: 2,
       timeoutBlocks: 200,
@@ -50,14 +54,29 @@ module.exports = {
           `wss://rinkeby.infura.io/ws/v3/${infuraKey}`
         ),
       network_id: 4,
-      gas: 8721975,
-      gasPrice: 32000000000,
+      gas: 11000000,
+      gasPrice: 42000000000,
       networkCheckTimeout: 10000000,
       confirmations: 2,
       timeoutBlocks: 200,
       skipDryRun: true,
       from: fromAddress,
     },
+    mumbai: {
+      provider: () =>
+        new HDWalletProvider(
+          mnemonic,
+          `https://polygon-mumbai.infura.io/v3/${infuraKey}`
+        ),
+      network_id: 80001,
+      gas: 6721975,
+      gasPrice: 10000000000,
+      networkCheckTimeout: 10000000,
+      confirmations: 2,
+      timeoutBlocks: 200,
+      skipDryRun: true,
+      from: fromAddress,
+    }
   },
 
   // Set default mocha options here, use special reporters etc.
